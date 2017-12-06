@@ -12,6 +12,7 @@ using namespace std;
 
 // TODO: стоит ввести допущение, что направление движения заранее известно
 
+const int DELAY = 50;
 
 const string WINDOW_NAME = "test_reconstruct";
 
@@ -61,6 +62,13 @@ void PrepareWindow(const Size2d &frameDims)
 
 	namedWindow(WINDOW_NAME, WINDOW_KEEPRATIO);
 	resizeWindow(WINDOW_NAME, windowDims.width, windowDims.height);
+	moveWindow(WINDOW_NAME, 0, 0);
+
+#ifdef SHOW_MASK
+	namedWindow("mask", WINDOW_KEEPRATIO);
+	resizeWindow("mask", windowDims.width, windowDims.height);
+	moveWindow("mask", windowDims.width, 0);
+#endif
 }
 
 
@@ -74,6 +82,10 @@ void FindNewFeatures(InputArray frame, vector< PointTrack > &cornerPointsTracks)
 			mask, track.back(), 
 			maskParams.radius, maskParams.color, maskParams.thickness);
 	}
+
+#ifdef SHOW_MASK
+	imshow("mask", mask);
+#endif
 
 	vector< Point2f > newPoints;
 	goodFeaturesToTrack(
@@ -105,6 +117,20 @@ vector< Point2f > GetLastPointPositions(const vector< PointTrack > &pointsTracks
 }
 
 
+vector<bool> GoodTrackedPoints(const vector< Point2f > &originalPoitions, const vector< Point2f > &reversePoitions) {
+	vector<bool> goodTracks(originalPoitions.size());
+
+	for (size_t i = 0; i < originalPoitions.size(); i++) {
+		float x_val = abs(originalPoitions[i].x - reversePoitions[i].x);
+		float y_val = abs(originalPoitions[i].y - reversePoitions[i].y);
+
+		goodTracks[i] = (max(x_val, y_val) < 1.0);
+	}
+
+	return goodTracks;
+}
+
+
 void TrackFeatures(InputArray frameGray, vector< PointTrack > &cornerPointsTracks, InputOutputArray visualFrame) {
 	if (cornerPointsTracks.empty())
 		return;
@@ -122,12 +148,22 @@ void TrackFeatures(InputArray frameGray, vector< PointTrack > &cornerPointsTrack
 		opticalFlowParams.criteria,
 		opticalFlowParams.flags, opticalFlowParams.minEigThreshold);
 
-	// TODO: можно добавить обратную проверку
+	// back-track
+	vector< Point2f > reversePoints;
+	calcOpticalFlowPyrLK(
+		frameGray, prevGray,
+		newPoints, reversePoints,
+		status, err,
+		opticalFlowParams.winSize, opticalFlowParams.maxLevel,
+		opticalFlowParams.criteria,
+		opticalFlowParams.flags, opticalFlowParams.minEigThreshold);
+
+	vector<bool> goodTracks = GoodTrackedPoints(lastPointsPoitions, reversePoints);
 
 	vector< PointTrack > newTracks;
 	newTracks.reserve( cornerPointsTracks.size() );
 	for (size_t i = 0; i < newPoints.size(); i++) {
-		if (!status[i])
+		if (!goodTracks[i])
 			continue;
 
 		const Point2f &point = newPoints[i];
@@ -184,7 +220,7 @@ int main(int argc, char** argv)
 
 		imshow(WINDOW_NAME, visualFrame);
 
-		char c = static_cast<char>(waitKey(2));
+		char c = static_cast<char>(waitKey(DELAY));
 		if (c == 27)
 			break;
 
