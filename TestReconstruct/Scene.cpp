@@ -1,16 +1,28 @@
 #include <opencv2/imgproc.hpp>
+#include <opencv2/video/tracking.hpp> // calcOpticalFlowPyrLK
+#include <opencv2/imgcodecs.hpp> // imwrite
+
+#include <windows.h>
+
+// ��� ��� � ��� ���� ��� ����� �������, ����� ������
+#undef DrawText
+
+#ifdef _DEBUG
+#include <iostream>
+#endif
 
 #include "Scene.h"
-#include <opencv2/video/tracking.hpp>
 
 using namespace SimpleMapping;
 
 
 Scene::Scene(double frameRate)
-	: featuresAdded_(0)
-	, trackLength_(frameRate)
+	: frameIdx_(0)
+	, featuresAdded_(0)
+	, trackLength_( size_t( round(frameRate) ) )
 	, frameDeltaTime_(1.0 / frameRate)
 {
+	CreateDirectory("output", NULL);
 }
 
 Scene::~Scene()
@@ -19,15 +31,51 @@ Scene::~Scene()
 
 
 
-void Scene::FindNewFeatures(InputArray frameGray) 
+Mat Scene::ProcessNewFrame(const Mat &inputFrame)
 {
-	Mat mask = MaskExistingFeatures(frameGray.size());
+	cvtColor(inputFrame, frameGray_, COLOR_BGR2GRAY);
+	visualFrame_ = inputFrame;
+
+	TrackFeatures();
+
+	if ( NeedToFindNewFeatures() ) {
+		SaveFrame();
+		FindNewFeatures();
+	}
+
+	ShowFeaturesInfo();
+
+	cv::swap(prevGray_, frameGray_);
+	frameIdx_++;
+
+	return visualFrame_;
+}
+
+
+
+bool Scene::NeedToFindNewFeatures() const
+{
+	//return (frameIdx_ % params_.detectInterval == 0);
+	return (GetActiveFeaturePointsCount() == 0);
+}
+
+
+
+void Scene::SaveFrame() const
+{
+	imwrite("output/key_frame_" + to_string(frameIdx_) + ".png", visualFrame_);
+}
+
+
+void Scene::FindNewFeatures() 
+{
+	Mat mask = MaskExistingFeatures(frameGray_.size());
 
 	auto &featureParams = params_.featureParams;
 
-	FeaturesPositions newPoints;
+	FeaturesPositions newPositions;
 	goodFeaturesToTrack(
-		frameGray, newPoints,
+		frameGray_, newPositions,
 		featureParams.MAX_CORNERS, featureParams.qualityLevel,
 		featureParams.minDistance, mask,
 		featureParams.blockSize, featureParams.useHarrisDetector);
@@ -36,13 +84,13 @@ void Scene::FindNewFeatures(InputArray frameGray)
 	auto &opticalFlowParams = params_.opticalFlowParams;
 
 	cornerSubPix(
-		frameGray, newPoints,
+		frameGray_, newPositions,
 		cornerParams.subPixWinSize, cornerParams.zeroZone,
 		opticalFlowParams.criteria);
 
-	featuresAdded_ = newPoints.size();
+	featuresAdded_ = newPositions.size();
 
-	for (auto &newPointPosition : newPoints) {
+	for (auto &newPointPosition : newPositions) {
 		featurePoints_.push_back( FeaturePoint() );
 		featurePoints_.back().addPos(move(newPointPosition), frameDeltaTime_);
 	}
@@ -57,18 +105,21 @@ Mat Scene::MaskExistingFeatures(const Size &frameSize) const
 
 	auto &maskParams = params_.maskParams;
 
-	for (const FeaturePoint &point : featurePoints_) {
-		circle(
-			mask, point.currentPos(),
-			maskParams.radius, maskParams.color, maskParams.thickness);
+	// ��������� ��� (���� ������) �������� �����
+	for (const FeaturePoint &featurePoint : featurePoints_) {
+		if (featurePoint.active) {
+			circle(
+				mask, featurePoint.currentPos(),
+				maskParams.radius, maskParams.color, maskParams.thickness);
+		}
 	}
 
 	return mask;
 }
 
-//#include <fstream>
 
-void Scene::TrackFeatures(InputArray prevGray, InputArray frameGray, InputOutputArray visualFrame) 
+
+void Scene::TrackFeatures() 
 {
 	if (featurePoints_.empty())
 		return;
@@ -81,7 +132,7 @@ void Scene::TrackFeatures(InputArray prevGray, InputArray frameGray, InputOutput
 	auto &opticalFlowParams = params_.opticalFlowParams;
 
 	calcOpticalFlowPyrLK(
-		prevGray, frameGray,
+		prevGray_, frameGray_,
 		prevPoitions, newPositions,
 		status, err,
 		opticalFlowParams.winSize, opticalFlowParams.maxLevel,
@@ -91,7 +142,7 @@ void Scene::TrackFeatures(InputArray prevGray, InputArray frameGray, InputOutput
 	// back-track
 	FeaturesPositions reversePositions;
 	calcOpticalFlowPyrLK(
-		frameGray, prevGray,
+		frameGray_, prevGray_,
 		newPositions, reversePositions,
 		status, err,
 		opticalFlowParams.winSize, opticalFlowParams.maxLevel,
@@ -103,26 +154,24 @@ void Scene::TrackFeatures(InputArray prevGray, InputArray frameGray, InputOutput
 	size_t addedFeaturesIdx = newPositions.size() - featuresAdded_;
 
 	for (size_t i = 0; i < newPositions.size(); i++) {
-		auto &featurePoint = featurePoints_[i];
+		FeaturePoint &featurePoint = featurePoints_[i];
 
-		if (!goodTracks[i] && featurePoint.active) {
-			featurePoint.active = false;
-			DrawFeature(visualFrame, featurePoint, FeatureState_Bad);
-
-			/*ofstream file("out.txt");
-			file << featurePoint.track;
-			file.close();*/
+		if (!goodTracks[i]) {
+			if (featurePoint.active) {
+				featurePoint.active = false;
+				DrawFeature(featurePoint, FeatureState_Inactive);
+			}
 
 			continue;
 		}
 
 		featurePoint.addPos(newPositions[i], frameDeltaTime_);
 
-		if (i < addedFeaturesIdx)
-			DrawFeature(visualFrame, featurePoint, FeatureState_Normal);
-		else
-			DrawFeature(visualFrame, featurePoint, FeatureState_New);
+		bool isNew = (i < addedFeaturesIdx);
+		DrawActiveFeature(featurePoint, isNew);
 	}
+
+	MarkBadFeatures();
 }
 
 
@@ -131,8 +180,9 @@ Scene::FeaturesPositions Scene::GetLastFeaturesPositions() const
 {
 	vector< FeaturePoint::Point_t > lastFeaturePositions;
 	lastFeaturePositions.reserve( featurePoints_.size() );
-	for (const auto &point : featurePoints_) {
-		lastFeaturePositions.push_back( point.currentPos() );
+
+	for (const FeaturePoint &featurePoint : featurePoints_) {
+		lastFeaturePositions.push_back(featurePoint.currentPos());
 	}
 
 	return lastFeaturePositions;
@@ -156,10 +206,22 @@ vector<bool> Scene::GoodTrackedPoints(const FeaturesPositions &original, const F
 
 
 
-size_t Scene::GetActiveFecturePoints() const
+vector< Scene::FeaturePointRef > Scene::GetActiveFeaturePoints()
+{	
+	vector< FeaturePointRef > activeFeaturePoints;
+	activeFeaturePoints.reserve(featurePoints_.size());
+	for (FeaturePoint &featurePoint : featurePoints_) {
+		if (featurePoint.active && featurePoint.couldUseVeloc())
+			activeFeaturePoints.push_back(featurePoint);
+	}
+	return activeFeaturePoints;
+}
+
+
+size_t Scene::GetActiveFeaturePointsCount() const
 {
 	size_t count = 0;
-	for (const auto &featurePoint : featurePoints_) {
+	for (const FeaturePoint &featurePoint : featurePoints_) {
 		if (featurePoint.active)
 			count++;
 	}
@@ -168,7 +230,114 @@ size_t Scene::GetActiveFecturePoints() const
 
 
 
-void Scene::DrawFeature(InputOutputArray visualFrame, const FeaturePoint& featurePoint, FeatureStates featureState) const
+#ifdef _DEBUG
+size_t badCount = 0;
+#endif
+
+bool Scene::MarkBadFeatures()
+{
+	vector< FeaturePointRef > activeFeaturePoints = GetActiveFeaturePoints();
+	EvalMeanVeloc(activeFeaturePoints);
+
+	bool hasBadFeatures = false;
+
+#ifdef _DEBUG
+	badCount = 0;
+#endif
+
+	for (auto &activeFeatureRef : activeFeaturePoints) {
+		FeaturePoint &activeFeature = activeFeatureRef.get();
+		
+		if (!activeFeature.couldUseVeloc())
+			continue;
+
+		if ( CheckFeatureBad(activeFeature.currentVeloc()) ) {
+			activeFeature.bad = true;
+#ifdef _DEBUG
+			badCount++;
+#endif
+			if (!hasBadFeatures)
+				hasBadFeatures = true;
+		}
+	}
+
+#ifdef _DEBUG
+	if (badCount > 0)
+		cout << "MarkBadFeatures::badCount = " << badCount << endl;
+#endif
+
+	return hasBadFeatures;
+}
+
+
+
+bool Scene::CheckFeatureBad(const Veloc_t& featureVeloc) const
+{
+	double featureVelocNorm = norm(featureVeloc);
+	double cos_theta = meanVeloc_.vec.dot(featureVeloc) / (meanVeloc_.norm * featureVelocNorm);
+	double theta = acos(cos_theta);
+
+#ifdef _DEBUG
+	if (badCount > 0)
+		cout << "CheckFeatureBad::theta = " << theta * 180.0 / CV_PI << ", eps = " << abs(featureVelocNorm - meanVeloc_.norm) << endl;
+#endif
+
+	return (
+		(abs(theta) > params_.THETA_MAX) || 
+		(abs(featureVelocNorm - meanVeloc_.norm) > meanVeloc_.maxEps));
+}
+
+
+
+void Scene::EvalMeanVeloc(const vector< FeaturePointRef > &activeFeaturePoints)
+{
+	Veloc_t meanVeloc(0.0, 0.0);
+	for (const auto &featurePointRef : activeFeaturePoints) {
+		meanVeloc += featurePointRef.get().currentVeloc();
+	}
+	
+	meanVeloc_.vec = meanVeloc / double(activeFeaturePoints.size());
+	meanVeloc_.norm = norm(meanVeloc_.vec);
+	meanVeloc_.maxEps = meanVeloc_.norm * params_.NORM_EPS_COEFF;
+}
+
+
+
+void Scene::ShowFeaturesInfo() const
+{
+	stringstream stream;
+	stream << "track total: " << featurePoints_.size();
+	DrawText(stream.str(), Point(20, 20));
+
+	stream.str("");
+	stream << "active tracks: " << GetActiveFeaturePointsCount();
+	DrawText(stream.str(), Point(20, 40));
+
+	stream.str("");
+	stream <<
+		"meanVeloc_: " << meanVeloc_.vec <<
+		", norm: " << meanVeloc_.norm <<
+		", maxEps:" << meanVeloc_.maxEps;
+	DrawText(stream.str(), Point(20, 60));
+}
+
+
+
+void Scene::DrawActiveFeature(const FeaturePoint& featurePoint, bool isNew) const
+{
+	if (!featurePoint.bad) {
+		if (isNew)
+			DrawFeature(featurePoint, FeatureState_Normal);
+		else
+			DrawFeature(featurePoint, FeatureState_New);
+	}
+	else
+		DrawFeature(featurePoint, FeatureState_Bad);
+}
+
+
+
+void Scene::DrawFeature(const FeaturePoint& featurePoint, FeatureStates featureState) const
 {
 	Scalar color;
 
@@ -185,23 +354,27 @@ void Scene::DrawFeature(InputOutputArray visualFrame, const FeaturePoint& featur
 	case FeatureState_Bad:
 		color = Scalar(0, 0, 255);
 		break;
+
+	case FeatureState_Inactive:
+		color = Scalar(255, 255, 0);
+		break;
 	}
 
-	DrawPoint(visualFrame, featurePoint, color);
-	DrawTrack(visualFrame, featurePoint, color);
-	DrawVelocity(visualFrame, featurePoint, Scalar(127, 127, 0));
+	DrawPoint(featurePoint, color);
+	DrawTrack(featurePoint, color);
+	DrawVelocity(featurePoint, Scalar(127, 127, 255));
 }
 
 
 
-void Scene::DrawPoint(InputOutputArray visualFrame, const FeaturePoint& featurePoint, const Scalar &color) const
+void Scene::DrawPoint(const FeaturePoint& featurePoint, const Scalar &color) const
 {
-	circle(visualFrame, featurePoint.currentPos(), 3, color, -1);
+	circle(visualFrame_, featurePoint.currentPos(), 3, color, -1);
 }
 
 
 
-void Scene::DrawTrack(InputOutputArray visualFrame, const FeaturePoint& featurePoint, const Scalar &color) const
+void Scene::DrawTrack(const FeaturePoint& featurePoint, const Scalar &color) const
 {
 	auto first = featurePoint.track.begin();
 	auto last = featurePoint.track.end();
@@ -211,43 +384,28 @@ void Scene::DrawTrack(InputOutputArray visualFrame, const FeaturePoint& featureP
 
 	Mat line = Mat(vector<Point2f>(first, last), true);
 	line.convertTo(line, CV_32S);
-	polylines(visualFrame, line, false, color);
+	polylines(visualFrame_, line, false, color);
 }
 
 
 
-void Scene::DrawVelocity(InputOutputArray visualFrame, const FeaturePoint& featurePoint, const Scalar& color) const
+void Scene::DrawVelocity(const FeaturePoint& featurePoint, const Scalar& color) const
 {
-	if (featurePoint.velocities.size() >= 3) {
-		auto currentVeloc = featurePoint.currentVeloc();
+	auto currentVeloc = featurePoint.currentVeloc();
 
-		FeaturePoint::Point_t from = featurePoint.currentPos();
-		FeaturePoint::Point_t to = currentVeloc + from;
-		arrowedLine(visualFrame, from, to, color);
+	FeaturePoint::Point_t from = featurePoint.currentPos();
+	Veloc_t to = currentVeloc + Veloc_t(from);
+	arrowedLine(visualFrame_, from, to, color);
 
-		stringstream stream;
-		stream << int(norm(currentVeloc));
-		Point textPos = Point(from) + Point(5, 0);
-		putText(visualFrame, stream.str(), textPos, FONT_HERSHEY_SIMPLEX, 0.3, Scalar(255, 255, 255), 0, CV_AA);
-	}
-}
-
-
-
-void Scene::ShowFeaturesInfo(InputOutputArray visualFrame) const
-{
 	stringstream stream;
-	stream << "track total: " << featurePoints_.size();
-	DrawText(visualFrame, stream.str(), Point(20, 20));
-
-	stream.str("");
-	stream << "active tracks: " << GetActiveFecturePoints();
-	DrawText(visualFrame, stream.str(), Point(20, 40));
+	stream << int(norm(currentVeloc));
+	Point textPos = Point(from) + Point(5, 0);
+	putText(visualFrame_, stream.str(), textPos, FONT_HERSHEY_SIMPLEX, 0.3, Scalar(255, 255, 255), 0, CV_AA);
 }
 
 
 
-void Scene::DrawText(InputOutputArray visualFrame, const string& str, const Point& pos) const
+void Scene::DrawText(const string& str, const Point& pos) const
 {
-	putText(visualFrame, str, pos, CV_FONT_HERSHEY_PLAIN, 1.0, Scalar(255, 255, 255), 1, LINE_4);
+	putText(visualFrame_, str, pos, CV_FONT_HERSHEY_PLAIN, 1.0, Scalar(255, 255, 255), 1, LINE_4);
 }

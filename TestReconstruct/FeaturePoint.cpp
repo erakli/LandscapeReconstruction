@@ -6,8 +6,9 @@ using namespace SimpleMapping;
 
 
 FeaturePoint::FeaturePoint()
-	: velocitiesSum(0.0)
+	: MIN_VELOC_SIZE(3)
 	, active(true)
+	, bad(false)
 {
 }
 
@@ -21,11 +22,22 @@ FeaturePoint::~FeaturePoint()
 void FeaturePoint::addPos(const Point_t& position, double dt)
 {
 	track.push_back(position);
-	velocities.push_back(Point_t(0, 0));
-	if (track.size() >= 3) {
-		size_t i = track.size() - 2;
+	if (active && !bad) {
+		evalVeloc(dt);
+	}
+}
+
+
+
+void FeaturePoint::evalVeloc(double dt)
+{
+	velocities.push_back(Veloc_t(0, 0));
+	if (track.size() >= MIN_VELOC_SIZE) {
+		size_t i = track.size() - (MIN_VELOC_SIZE - 1);
 		velocities[i] = CentralDifferenceDerivate(track, i, dt);
 		velocities[i + 1] = velocities[i];
+
+		velocitySum += velocities[i];
 	}
 }
 
@@ -38,7 +50,23 @@ FeaturePoint::Point_t FeaturePoint::currentPos() const
 
 
 
-FeaturePoint::Point_t FeaturePoint::currentVeloc() const
+Veloc_t FeaturePoint::currentVeloc() const
 {
 	return velocities.back();
+}
+
+
+
+// без проверки
+Veloc_t FeaturePoint::meanVeloc() const
+{
+	// первую и последнюю скорости не учитываем
+	return velocitySum / double(velocities.size() - 2);
+}
+
+
+
+bool FeaturePoint::couldUseVeloc() const
+{
+	return velocities.size() > MIN_VELOC_SIZE;
 }

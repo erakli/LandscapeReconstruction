@@ -10,10 +10,15 @@ namespace SimpleMapping
 	using namespace cv;
 	using namespace std;
 
+
+	typedef Point2d				Veloc_t;
+
+
 	template<class T>
 	Point_<T> Derivate(const Point_<T> &x1, const Point_<T> &x2, double delta) {
 		return (x2 - x1) / delta;
 	}
+
 
 	template<class T>
 	Point_<T> CentralDifferenceDerivate(const vector< Point_<T> > &f, size_t i, double h) {

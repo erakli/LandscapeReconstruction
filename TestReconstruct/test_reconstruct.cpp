@@ -1,7 +1,6 @@
 #include "opencv2/videoio.hpp"
 #include "opencv2/highgui.hpp"
-#include "opencv2/imgproc.hpp"	// cornerSubPix
-#include "opencv2/video/tracking.hpp"	// calcOpticalFlowPyrLK
+#include "opencv2/imgproc.hpp"	// cvtColor
 
 #include <deque>
 #include <iostream>
@@ -60,13 +59,11 @@ int main(int argc, char** argv)
 
 	PrepareWindow(frameDims);
 
-	const int DELAY = 5;
+	const int DELAY = 25;
 
-	Scene scene( cap.get(CV_CAP_PROP_FPS) );
+	double focalLength = 50.0;
+	double pixelSize = 0.250;
 
-	size_t detectInterval = 30;
-	size_t frameIdx = 0;
-	Mat prevGray;
 
 	try {
 		while (true) {
@@ -75,26 +72,13 @@ int main(int argc, char** argv)
 			if (frame.empty())
 				break;
 
-			Mat frameGray;
-			cvtColor(frame, frameGray, COLOR_BGR2GRAY);
-			Mat visualFrame = frame;
-
-			scene.TrackFeatures(prevGray, frameGray, visualFrame);
-	
-			if (frameIdx % detectInterval == 0) {
-				scene.FindNewFeatures(frameGray);
-			}
-
-			scene.ShowFeaturesInfo(visualFrame);
+			Mat visualFrame = scene.ProcessNewFrame(frame);
 
 			imshow(WINDOW_NAME, visualFrame);
 
 			char c = static_cast<char>(waitKey(DELAY));
 			if (c == 27)
 				break;
-
-			cv::swap(prevGray, frameGray);
-			frameIdx++;
 		}
 	}
 	catch (cv::Exception &e) {

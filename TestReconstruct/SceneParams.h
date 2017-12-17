@@ -7,8 +7,10 @@ namespace SimpleMapping
 
 	struct SceneParams
 	{
+		size_t detectInterval = 30;
+
 		struct FeatureParams {
-			int MAX_CORNERS = 1000;
+			int MAX_CORNERS = 500;
 			double qualityLevel = 0.3;
 			double minDistance = 7.0;
 			int blockSize = 7;
@@ -34,6 +36,13 @@ namespace SimpleMapping
 			Scalar color = Scalar(0);
 			int thickness = -1;
 		} maskParams;
+
+		
+		// максимальное допустимое отклонение от среднего вектора скорости
+		double THETA_MAX = 10.0 * (CV_PI / 180.0); // рад
+
+		// коэффициент от 0 до 1 - максимальное отклонение от среднего значения скорости
+		double NORM_EPS_COEFF = 0.4;
 	};
 
 }
