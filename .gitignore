@@ -304,4 +304,5 @@ $RECYCLE.BIN/
 
 # User ignores
 # =========================
+*/output/
 *.mp4
