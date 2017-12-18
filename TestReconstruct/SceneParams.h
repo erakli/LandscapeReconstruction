@@ -10,10 +10,10 @@ namespace SimpleMapping
 		size_t detectInterval = 30;
 
 		struct FeatureParams {
-			int MAX_CORNERS = 500;
-			double qualityLevel = 0.3;
-			double minDistance = 7.0;
-			int blockSize = 7;
+			int MAX_CORNERS = 1800;
+			double qualityLevel = 0.015;
+			double minDistance = 20.0;
+			int blockSize = 3;
 			bool useHarrisDetector = false;
 		} featureParams;
 
@@ -32,7 +32,7 @@ namespace SimpleMapping
 		} opticalFlowParams;
 
 		struct MaskParams {
-			int radius = 15;
+			int radius = 10;
 			Scalar color = Scalar(0);
 			int thickness = -1;
 		} maskParams;
