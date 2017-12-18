@@ -4,8 +4,11 @@
 
 #include <windows.h>
 
-// пїЅпїЅпїЅ пїЅпїЅпїЅ пїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ, пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
+// так как у нас есть уже такая функция, уберём макрос
 #undef DrawText
+
+#include <fstream>
+#include <iomanip>
 
 #ifdef _DEBUG
 #include <iostream>
@@ -16,9 +19,11 @@
 using namespace SimpleMapping;
 
 
-Scene::Scene(double frameRate)
+Scene::Scene(const Camera &camera, double frameRate)
 	: frameIdx_(0)
+	, lastKeyFrame_(0)
 	, featuresAdded_(0)
+	, camera_(camera)
 	, trackLength_( size_t( round(frameRate) ) )
 	, frameDeltaTime_(1.0 / frameRate)
 {
@@ -39,8 +44,11 @@ Mat Scene::ProcessNewFrame(const Mat &inputFrame)
 	TrackFeatures();
 
 	if ( NeedToFindNewFeatures() ) {
-		SaveFrame();
+		if (frameIdx_ != 0) {
+			SaveWorldPoints();
+		}
 		FindNewFeatures();
+		SaveFrame();
 	}
 
 	ShowFeaturesInfo();
@@ -53,6 +61,13 @@ Mat Scene::ProcessNewFrame(const Mat &inputFrame)
 
 
 
+void Scene::SaveWorldPoints()
+{
+	vector< Point3d > worldPoints = FindWorldPoints();
+	SaveWorldPoints(worldPoints);
+}
+
+
 bool Scene::NeedToFindNewFeatures() const
 {
 	//return (frameIdx_ % params_.detectInterval == 0);
@@ -61,10 +76,73 @@ bool Scene::NeedToFindNewFeatures() const
 
 
 
-void Scene::SaveFrame() const
+void Scene::SaveFrame()
 {
-	imwrite("output/key_frame_" + to_string(frameIdx_) + ".png", visualFrame_);
+	lastKeyFrame_ = frameIdx_;
+
+	Mat keyFrame;
+	visualFrame_.copyTo(keyFrame);
+
+	auto currentFeaturePoints = GetLastAddedFeaturePoints();
+
+	for (const FeaturePoint &feature : currentFeaturePoints) {
+		circle(keyFrame, feature.initialPos(), 3, Scalar(0, 255, 0), -1);
+	}
+
+	imwrite("output/key_frame_" + to_string(frameIdx_) + ".png", keyFrame);
 }
+
+
+
+void Scene::SaveWorldPoints(const vector< Point3d > &worldPoints)
+{
+	ofstream file("output/key_frame_heights_" + to_string(lastKeyFrame_) + ".txt");
+	file << setprecision(10);
+	for (auto &point : worldPoints) {
+		file << point.x << ", " << point.y << ", " << point.z << endl;
+	}
+	file.close();
+}
+
+
+
+vector< Point3d > Scene::FindWorldPoints()
+{
+	// мы предполагаем, что во всех алгоритмах одинаковый порядок всех элементовы
+	vector< FeaturePointRef > goodFeaturePoints = GetLastGoodFeaturePoints();
+	vector< Point3d > worldPoints(goodFeaturePoints.size());
+
+	double maxDistance = 0.0;
+
+	for (size_t i = 0; i < goodFeaturePoints.size(); i++) {
+		worldPoints[i] = EvalWorldVec(goodFeaturePoints[i].get());
+		if (maxDistance < worldPoints[i].z)
+			maxDistance = worldPoints[i].z;
+	}
+
+	// вычислим таким образом высоты
+	for_each(
+		worldPoints.begin(),
+		worldPoints.end(),
+		[maxDistance](Point3d &point){ point.z = maxDistance - point.z; });
+
+	return worldPoints;
+}
+
+
+
+Point3d Scene::EvalWorldVec(const FeaturePoint &featurePoint) const
+{
+	FeaturePoint::Point_t imagePlanarPos_m = 
+		camera_.pixelSize_m *
+		(featurePoint.initialPos() - FeaturePoint::Point_t(camera_.centerPoint));
+
+	Point3d imageVec(imagePlanarPos_m.x, imagePlanarPos_m.y, camera_.focal_m);
+	Veloc_t imagePlanarVeloc_m = featurePoint.meanVeloc() * camera_.pixelSize_m;
+
+	return (camera_.veloc / norm(imagePlanarVeloc_m)) * imageVec;
+}
+
 
 
 void Scene::FindNewFeatures() 
@@ -105,7 +183,7 @@ Mat Scene::MaskExistingFeatures(const Size &frameSize) const
 
 	auto &maskParams = params_.maskParams;
 
-	// пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ (пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ) пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ
+	// маскируем все (даже плохие) активные точки
 	for (const FeaturePoint &featurePoint : featurePoints_) {
 		if (featurePoint.active) {
 			circle(
@@ -206,6 +284,39 @@ vector<bool> Scene::GoodTrackedPoints(const FeaturesPositions &original, const F
 
 
 
+vector<Scene::FeaturePointRef> Scene::GetLastAddedFeaturePoints()
+{
+	size_t addedFeaturesIdx = featurePoints_.size() - featuresAdded_;
+
+	vector< FeaturePointRef > lastAddedFeaturePoints;
+	lastAddedFeaturePoints.reserve(featuresAdded_);
+
+	for (size_t i = addedFeaturesIdx; i < featurePoints_.size(); i++) {
+		lastAddedFeaturePoints.push_back(featurePoints_[i]);
+	}
+	return lastAddedFeaturePoints;
+}
+
+
+
+// берём из последних добавленных точек
+vector<Scene::FeaturePointRef> Scene::GetLastGoodFeaturePoints()
+{
+	size_t addedFeaturesIdx = featurePoints_.size() - featuresAdded_;
+
+	vector< FeaturePointRef > goodFeaturePoints;
+	goodFeaturePoints.reserve(featuresAdded_);
+
+	for (size_t i = addedFeaturesIdx; i < featurePoints_.size(); i++) {
+		FeaturePoint &featurePoint = featurePoints_[i];
+		if (!featurePoint.bad && featurePoint.couldUseVeloc())
+			goodFeaturePoints.push_back(featurePoint);
+	}
+	return goodFeaturePoints;
+}
+
+
+
 vector< Scene::FeaturePointRef > Scene::GetActiveFeaturePoints()
 {	
 	vector< FeaturePointRef > activeFeaturePoints;
@@ -230,7 +341,7 @@ size_t Scene::GetActiveFeaturePointsCount() const
 
 
 
-#ifdef _DEBUG
+#if defined(_DEBUG) && defined(BAD_COUNT_OUTPUT)
 size_t badCount = 0;
 #endif
 
@@ -241,7 +352,7 @@ bool Scene::MarkBadFeatures()
 
 	bool hasBadFeatures = false;
 
-#ifdef _DEBUG
+#if defined(_DEBUG) && defined(BAD_COUNT_OUTPUT)
 	badCount = 0;
 #endif
 
@@ -253,7 +364,7 @@ bool Scene::MarkBadFeatures()
 
 		if ( CheckFeatureBad(activeFeature.currentVeloc()) ) {
 			activeFeature.bad = true;
-#ifdef _DEBUG
+#if defined(_DEBUG) && defined(BAD_COUNT_OUTPUT)
 			badCount++;
 #endif
 			if (!hasBadFeatures)
@@ -261,7 +372,7 @@ bool Scene::MarkBadFeatures()
 		}
 	}
 
-#ifdef _DEBUG
+#if defined(_DEBUG) && defined(BAD_COUNT_OUTPUT)
 	if (badCount > 0)
 		cout << "MarkBadFeatures::badCount = " << badCount << endl;
 #endif
@@ -277,7 +388,7 @@ bool Scene::CheckFeatureBad(const Veloc_t& featureVeloc) const
 	double cos_theta = meanVeloc_.vec.dot(featureVeloc) / (meanVeloc_.norm * featureVelocNorm);
 	double theta = acos(cos_theta);
 
-#ifdef _DEBUG
+#if defined(_DEBUG) && defined(BAD_COUNT_OUTPUT)
 	if (badCount > 0)
 		cout << "CheckFeatureBad::theta = " << theta * 180.0 / CV_PI << ", eps = " << abs(featureVelocNorm - meanVeloc_.norm) << endl;
 #endif
@@ -362,7 +473,7 @@ void Scene::DrawFeature(const FeaturePoint& featurePoint, FeatureStates featureS
 
 	DrawPoint(featurePoint, color);
 	DrawTrack(featurePoint, color);
-	DrawVelocity(featurePoint, Scalar(127, 127, 255));
+	//DrawVelocity(featurePoint, Scalar(127, 127, 255));
 }
 
 

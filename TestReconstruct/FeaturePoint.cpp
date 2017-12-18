@@ -57,6 +57,12 @@ Veloc_t FeaturePoint::currentVeloc() const
 
 
 
+FeaturePoint::Point_t FeaturePoint::initialPos() const
+{
+	return track.front();
+}
+
+
 // без проверки
 Veloc_t FeaturePoint::meanVeloc() const
 {

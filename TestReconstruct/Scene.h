@@ -5,6 +5,7 @@
 #include "SimpleMappingCore.h"
 #include "FeaturePoint.h"
 #include "SceneParams.h"
+#include "Camera.h"
 
 namespace SimpleMapping 
 {
@@ -14,22 +15,29 @@ namespace SimpleMapping
 		typedef vector< FeaturePoint::Point_t >	FeaturesPositions;
 		typedef reference_wrapper<FeaturePoint>	FeaturePointRef;
 	public:
-		Scene(double frameRate);
+		Scene(const Camera &camera, double frameRate);
 		~Scene();
 
 		Mat ProcessNewFrame(const Mat &inputFrame);
+		void SaveWorldPoints();
 
 	private:
+		bool NeedToFindNewFeatures() const;
+		void SaveFrame();
+
+		void SaveWorldPoints(const vector< Point3d > &worldPoints);
+		vector< Point3d > FindWorldPoints();
+		Point3d EvalWorldVec(const FeaturePoint &featurePoint) const;
+
 		void FindNewFeatures();
 		void TrackFeatures();
-
-		bool NeedToFindNewFeatures() const;
-		void SaveFrame() const;
 
 		Mat MaskExistingFeatures(const Size &frameSize) const;
 		FeaturesPositions GetLastFeaturesPositions() const;
 		vector<bool> GoodTrackedPoints(const FeaturesPositions &original, const FeaturesPositions &reverse) const;
 
+		vector< FeaturePointRef > GetLastAddedFeaturePoints();
+		vector< FeaturePointRef > GetLastGoodFeaturePoints();
 		vector< FeaturePointRef > GetActiveFeaturePoints();
 		size_t GetActiveFeaturePointsCount() const;
 		
@@ -56,6 +64,7 @@ namespace SimpleMapping
 		Mat visualFrame_;
 
 		size_t frameIdx_;
+		size_t lastKeyFrame_;
 
 		vector< FeaturePoint > featurePoints_;
 		size_t featuresAdded_;
@@ -66,6 +75,7 @@ namespace SimpleMapping
 			double maxEps;
 		} meanVeloc_;
 
+		Camera camera_;
 
 		SceneParams params_;
 		size_t trackLength_;

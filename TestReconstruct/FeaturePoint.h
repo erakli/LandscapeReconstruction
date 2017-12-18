@@ -24,6 +24,7 @@ namespace SimpleMapping
 		Point_t currentPos() const;
 		Veloc_t currentVeloc() const;
 
+		Point_t initialPos() const;
 		Veloc_t meanVeloc() const;
 
 		bool couldUseVeloc() const;

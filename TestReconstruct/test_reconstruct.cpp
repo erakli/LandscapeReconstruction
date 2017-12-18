@@ -59,11 +59,19 @@ int main(int argc, char** argv)
 
 	PrepareWindow(frameDims);
 
-	const int DELAY = 25;
+	const int DELAY = 1;
 
 	double focalLength = 50.0;
 	double pixelSize = 0.250;
+	double cameraVeloc = 10.0 / 3.6; // km/h -> m/s
 
+	Camera camera(	focalLength,
+					Point2i(frameDims.width / 2.0, frameDims.height / 2.0), 
+					pixelSize,
+					cameraVeloc);
+
+	Scene scene(	camera, 
+					cap.get(CV_CAP_PROP_FPS));
 
 	try {
 		while (true) {
@@ -80,6 +88,9 @@ int main(int argc, char** argv)
 			if (c == 27)
 				break;
 		}
+
+		// сохраним для последнего ключегого кадра
+		scene.SaveWorldPoints();
 	}
 	catch (cv::Exception &e) {
 		cerr << e.msg << endl;

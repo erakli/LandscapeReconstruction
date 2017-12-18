@@ -119,11 +119,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Camera.cpp" />
     <ClCompile Include="FeaturePoint.cpp" />
     <ClCompile Include="Scene.cpp" />
     <ClCompile Include="test_reconstruct.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Camera.h" />
     <ClInclude Include="FeaturePoint.h" />
     <ClInclude Include="Scene.h" />
     <ClInclude Include="SceneParams.h" />
