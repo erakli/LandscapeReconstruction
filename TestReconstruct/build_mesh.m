@@ -15,4 +15,7 @@ axis ij
 xlabel('X (m)') % x-axis label
 ylabel('Y (m)') % y-axis label
 
+xlim([-40 40])
+ylim([-40 40])
+
 colormap jet
